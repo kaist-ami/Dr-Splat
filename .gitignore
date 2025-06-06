@@ -1,0 +1,13 @@
+*.pyc
+.vscode
+output
+build
+diff_rasterization/diff_rast.egg-info
+diff_rasterization/dist
+**/__pycache__/
+events.out*
+release
+*.png
+*.jpg
+*.out
+shells
