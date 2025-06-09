@@ -41,7 +41,7 @@ pip install faiss-cpu
 ```bash
 mkdir "${COLMAP_PATH}/language_features"
 CUDA_VISIBLE_DEVICES=${GPU_ID} python preprocessing.py \
-                        --dataset_path ${COLMAP_PATH} \
+                        --dataset_path ${CAMERA_PATH} \
 
 echo "All commands executed."
 ```
@@ -51,7 +51,7 @@ echo "All commands executed."
 
 ```bash
 CUDA_VISIBLE_DEVICES=${GPU_ID} python train.py \
-                        -s ${COLMAP_PATH} \
+                        -s ${CAMERA_PATH} \
                         -m ${OUTPUT_PATH} \
                         --start_checkpoint ${TRAINED_3DGS_PATH}/chkpnt30000.pth \
                         --feature_level 1 \
@@ -66,7 +66,7 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python train.py \
 ## Feature PCA Visualization
 ```bash
 CUDA_VISIBLE_DEVICES=${GPU_ID} python render_pca.py \
-                        -s ${COLMAP_PATH} \
+                        -s ${CAMERA_PATH} \
                         -m ${TRAINED_DRSPLAT_PATH} \
                         --pq_index ckpts/pq_index.faiss \
                         --feature_level 1 \
@@ -76,7 +76,7 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python render_pca.py \
 ## Activation Visualization
 ```bash
 CUDA_VISIBLE_DEVICES=${GPU_ID} python render_activation.py \
-                        -s ${COLMAP_PATH} \
+                        -s ${CAMERA_PATH} \
                         -m ${TRAINED_DRSPLAT_PATH} \
                         --semantic_model sam \
                         --feature_level 1 \
