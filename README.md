@@ -88,6 +88,8 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python render_activation.py \
                         -l language_features_dim3
 ```
 
+## Evaluation
+- TBA
 
 ## Citation
 ```
