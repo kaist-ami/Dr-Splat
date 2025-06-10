@@ -3,7 +3,7 @@
 
 ### [Project Page](https://drsplat.github.io/) | [Paper](https://arxiv.org/abs/2502.16652)
 
-![teaser](images/github_teaser.png)
+![github_teaser](https://github.com/user-attachments/assets/eb6f12cf-152a-4fe9-96b7-7717a9c1a543)
 
 This repository is official implementation for the CVPR 2025 highlight paper, Dr. Splat.
 
