@@ -14,11 +14,19 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
 
-def l1_loss(network_output, gt):
-    return torch.abs((network_output - gt)).mean()
+def l1_loss(network_output, gt, mask=None, weight=None):
+    if mask is None:
+        return torch.abs((network_output - gt)).mean()
+    if weight is None:
+        weight = torch.ones_like(mask)
+    return torch.abs((network_output - gt) * mask * weight).sum() / mask.sum().clamp(min=1)
 
-def l2_loss(network_output, gt):
-    return ((network_output - gt) ** 2).mean()
+def l2_loss(network_output, gt, mask=None, weight=None):
+    if mask is None:
+        return ((network_output - gt) ** 2).mean()
+    if weight is None:
+        weight = torch.ones_like(mask)
+    return ((network_output - gt) ** 2 * mask * weight).sum() / mask.sum().clamp(min=1)
 
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
@@ -61,4 +69,3 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
         return ssim_map.mean()
     else:
         return ssim_map.mean(1).mean(1).mean(1)
-

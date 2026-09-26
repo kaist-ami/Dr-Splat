@@ -17,7 +17,8 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
-                 image_name, uid,
+                 image_name, uid, cx=None, cy=None, depth=None,
+                 gt_sam_mask=None, gt_mask_feat=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
                  ):
         super(Camera, self).__init__()
@@ -28,6 +29,8 @@ class Camera(nn.Module):
         self.T = T
         self.FoVx = FoVx
         self.FoVy = FoVy
+        self.cx = cx
+        self.cy = cy
         self.image_name = image_name
         try:
             self.data_device = torch.device(data_device)
@@ -36,7 +39,16 @@ class Camera(nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
+        self.data_on_gpu = True
         self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
+        self.original_mask = gt_alpha_mask.to(self.data_device) if gt_alpha_mask is not None else None
+        self.original_depth = depth.to(self.data_device) if isinstance(depth, torch.Tensor) else depth
+        self.original_sam_mask = gt_sam_mask.to(self.data_device) if gt_sam_mask is not None else None
+        self.original_mask_feat = gt_mask_feat.to(self.data_device) if gt_mask_feat is not None else None
+        self.pesudo_ins_feat = None
+        self.pesudo_mask_bool = None
+        self.cluster_masks = None
+        self.bClusterOccur = None
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
 
@@ -55,6 +67,21 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+    def to_gpu(self):
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, torch.Tensor) and not attr.is_cuda:
+                setattr(self, attr_name, attr.to("cuda"))
+        self.data_on_gpu = True
+
+    def to_cpu(self):
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, torch.Tensor) and attr.is_cuda:
+                setattr(self, attr_name, attr.to("cpu"))
+        self.data_on_gpu = False
+
     def get_language_feature(self, language_feature_dir, feature_level):
         language_feature_name = os.path.join(language_feature_dir, self.image_name)
         seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy'))
@@ -103,4 +130,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

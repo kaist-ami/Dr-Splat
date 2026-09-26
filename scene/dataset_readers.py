@@ -275,7 +275,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             norm_data = im_data / 255.0
             arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-            image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+            image = Image.fromarray(np.array(arr*255.0, dtype=np.uint8), "RGB")
 
             # NOTE: load SAM mask and CLIP feat. [OpenGaussian]
             mask_seg_path = os.path.join(path, "language_features/" + frame["file_path"].split('/')[-1] + "_s.npy")
@@ -301,14 +301,23 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             # ----- modify -----
             if fovx == None:
+                focal_length_x = None
+                focal_length_y = None
                 if "K" in frame.keys():
-                    focal_length = frame["K"][0][0]
+                    focal_length_x = frame["K"][0][0]
+                    focal_length_y = frame["K"][1][1]
                 if "fl_x" in contents.keys():
-                    focal_length = contents["fl_x"]
-                if "fl_x" in frame.keys():
-                    focal_length = frame["fl_x"]
-                FovY = focal2fov(focal_length, image.size[1])
-                FovX = focal2fov(focal_length, image.size[0])
+                    focal_length_x = contents["fl_x"]
+                if "fl_y" in contents.keys():
+                    focal_length_y = contents["fl_y"]
+
+                if focal_length_x is None:
+                    raise ValueError(f"Missing fl_x/K[0][0] for frame {frame['file_path']}")
+                if focal_length_y is None:
+                    focal_length_y = focal_length_x
+
+                FovY = focal2fov(focal_length_y, image.size[1])
+                FovX = focal2fov(focal_length_x, image.size[0])
             else:
                 fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
                 FovY = fovx 

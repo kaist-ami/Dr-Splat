@@ -11,6 +11,7 @@
 
 from scene.cameras import Camera
 import numpy as np
+import torch
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
 
@@ -43,18 +44,37 @@ def loadCam(args, id, cam_info, resolution_scale):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    # resized_image_rgb = PILtoTorch(cam_info.image, resolution)
     resized_image_rgb = PILtoTorch(image, resolution)
+    scale_x = resolution[0] / orig_w
+    scale_y = resolution[1] / orig_h
+
+    gt_sam_mask = None
+    if getattr(cam_info, "sam_mask", None) is not None:
+        step = int(max(args.resolution, 1))
+        gt_sam_mask = torch.from_numpy(cam_info.sam_mask[:, ::step, ::step])
+        if resized_image_rgb.shape[1] != gt_sam_mask.shape[1] or resized_image_rgb.shape[2] != gt_sam_mask.shape[2]:
+            resolution = (gt_sam_mask.shape[2], gt_sam_mask.shape[1])
+            resized_image_rgb = PILtoTorch(image, resolution)
+            scale_x = resolution[0] / orig_w
+            scale_y = resolution[1] / orig_h
+
+    mask_feat = None
+    if getattr(cam_info, "mask_feat", None) is not None:
+        mask_feat = torch.from_numpy(cam_info.mask_feat)
 
     gt_image = resized_image_rgb[:3, ...]
     loaded_mask = None
 
-    if resized_image_rgb.shape[1] == 4:
+    if resized_image_rgb.shape[0] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
                   image=gt_image, gt_alpha_mask=loaded_mask,
+                  cx=getattr(cam_info, "cx", orig_w / 2) * scale_x,
+                  cy=getattr(cam_info, "cy", orig_h / 2) * scale_y,
+                  depth=getattr(cam_info, "depth", None),
+                  gt_sam_mask=gt_sam_mask, gt_mask_feat=mask_feat,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):

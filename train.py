@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -25,6 +25,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+import torchvision
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -33,29 +34,48 @@ except ImportError:
 import numpy as np
 import faiss
 import gc
+from shutil import copyfile
 
 from autoencoder.model import Autoencoder
+
+
+def save_count_render_debug(output_dir, index, image_name, rendered, gt):
+    os.makedirs(output_dir, exist_ok=True)
+
+    stem = f"{index:05d}_{image_name}"
+    render_png_path = os.path.join(output_dir, f"{stem}_render.png")
+    gt_png_path = os.path.join(output_dir, f"{stem}_gt.png")
+    render_npy_path = os.path.join(output_dir, f"{stem}_render.npy")
+    gt_npy_path = os.path.join(output_dir, f"{stem}_gt.npy")
+
+    rendered = torch.clamp(rendered.detach().cpu(), 0.0, 1.0)
+    gt = torch.clamp(gt.detach().cpu(), 0.0, 1.0)
+
+    torchvision.utils.save_image(rendered, render_png_path)
+    torchvision.utils.save_image(gt, gt_png_path)
+    np.save(render_npy_path, rendered.permute(1, 2, 0).numpy())
+    np.save(gt_npy_path, gt.permute(1, 2, 0).numpy())
 
 
 def update_voting_mat(result_dict, language_feature_mask, gt_language_feature, contribution, ids, args):
     # Select only locations where Mask is True
     mask_idx = language_feature_mask.squeeze(0).nonzero(as_tuple=True)
-    
+
     # Get the ID and contributions of the gaussians who contributed from that location
     contrib = contribution[mask_idx]  # shape: [N, 100]
     ray_ids = ids[mask_idx]  # shape: [N, 100]
     gt_feats = gt_language_feature[:, mask_idx[0], mask_idx[1]]  # shape: [3, N]
-    
+
     _, indices = torch.topk(contrib, args.topk, dim=1)
     ray_ids = torch.gather(ray_ids, 1, indices)
-    
+
     # Filter only valid contributions (non-1 IDs and non-0 contributions)
     valid_mask = (ray_ids != -1)
     ray_ids = ray_ids[valid_mask].view(-1)  # shape: [M] (valid Gaussian ID)
     gt_feats = gt_feats.T.unsqueeze(1).repeat(1, args.topk, 1)[valid_mask]  # shape: [M, 3]
 
     unique_ids = torch.unique(ray_ids)
-    
+
     for uid in unique_ids:
         mask = ray_ids == uid
         if uid.item() not in result_dict:
@@ -74,15 +94,25 @@ def compute_average(features):
 
 def majority_voting(gaussians, scene, pipe, background, dataset, args):
     lf_path = "/" + os.path.join(*dataset.lf_path.split('/')[:-1], "language_features")
+    debug_count_render_dir = None
+    debug_saved = 0
+    debug_limit = max(args.debug_count_render_limit, 0)
+
+    if args.debug_count_render:
+        debug_count_render_dir = args.debug_count_render_dir
+        if debug_count_render_dir is None:
+            debug_count_render_dir = os.path.join(dataset.model_path, "debug_count_render")
+        os.makedirs(debug_count_render_dir, exist_ok=True)
+
     if args.use_pq:
         voting_mat = -1 * torch.ones((gaussians._opacity.shape[0], 17), dtype=torch.uint8, device="cuda")
     else:
         voting_mat = -1 * torch.zeros((gaussians._opacity.shape[0], 3), dtype=torch.float32, device="cuda")
     viewpoint_stack = scene.getTrainCameras().copy()
-    
+
     from collections import defaultdict
     result_dict = defaultdict(list)
-    
+
     #### code edit ####
     num_masks_array = torch.zeros(len(viewpoint_stack), dtype=torch.int)
     for i in range(len(viewpoint_stack)):
@@ -100,18 +130,34 @@ def majority_voting(gaussians, scene, pipe, background, dataset, args):
         language_feature_name = os.path.join(lf_path, viewpoint_cam.image_name)
         feature_map = torch.from_numpy(np.load(language_feature_name + '_f.npy'))
         features_array[offset:offset+num_masks_array[i]] = feature_map
-        
+
         render_pkg = count_render(viewpoint_cam, gaussians, pipe, background)
         ids, contribution = (
             render_pkg['per_pixel_gaussian_ids'].detach(),
             render_pkg['per_pixel_gaussian_contributions'].detach(),
         )
+
+        should_save_debug = (
+            debug_count_render_dir is not None
+            and debug_saved < debug_limit
+            and i % max(args.debug_count_render_every, 1) == 0
+        )
+        if should_save_debug:
+            save_count_render_debug(
+                debug_count_render_dir,
+                i,
+                viewpoint_cam.image_name,
+                render_pkg["render"],
+                viewpoint_cam.original_image[0:3, :, :],
+            )
+            debug_saved += 1
+
         seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy')).type(torch.int64)[dataset.feature_level].unsqueeze(0)
         seg_map_bool = seg_map != -1
         seg_map += offset
 
         mask_idx = seg_map_bool.squeeze(0).nonzero(as_tuple=True)
-        
+
         # Get the ID and contributions of the gaussians who contributed from that location
         contrib = contribution[mask_idx]  # shape: [N, 100]
         ray_ids = ids[mask_idx]  # shape: [N, 100]
@@ -160,7 +206,7 @@ def majority_voting(gaussians, scene, pipe, background, dataset, args):
         averaged_tensor = index.sa_encode(averaged_tensor.cpu().numpy())
         averaged_tensor = torch.ByteTensor(averaged_tensor).to("cuda")
         averaged_tensor[invalid_gaussians,:] = -1
-        
+
 
     return averaged_tensor
 
@@ -174,18 +220,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not checkpoint:
             raise ValueError("checkpoint missing!!!!!")
     if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
+        (model_params, first_iter) = torch.load(checkpoint, weights_only=False)
         if len(model_params) == 12 and opt.include_feature:
             first_iter = 0
         gaussians.restore(model_params, opt)
-        
+
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    
+
     maj_feat = majority_voting(gaussians, scene, pipe, background, dataset, args)
-    
+
     gaussians._language_feature = maj_feat
-    
+
     iteration = 0
 
     if (iteration in saving_iterations):
@@ -195,16 +241,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if (iteration in checkpoint_iterations):
         print("\n[ITER {}] Saving Checkpoint".format(iteration))
         torch.save((gaussians.capture(opt.include_feature), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-            
 
-def prepare_output_and_logger(args):    
+
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
@@ -224,7 +270,7 @@ def training_report(tb_writer, iteration, testing_iterations, scene : Scene, ren
     if iteration in testing_iterations:
         print(f'testing for iter {iteration}')
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
+        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
         for config in validation_configs:
@@ -241,7 +287,7 @@ def training_report(tb_writer, iteration, testing_iterations, scene : Scene, ren
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
+                l1_test /= len(config['cameras'])
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
@@ -267,14 +313,14 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[0])
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    
+
     parser.add_argument("--name_extra", type=str, default = None)
     parser.add_argument("--mode", type=str, default = "mean")
     parser.add_argument("--topk", type=int, default = 1)
-    
+
     parser.add_argument("--use_pq", action="store_true")
     parser.add_argument("--pq_index", type=str, default=None)
-    
+
     parser.add_argument('--encoder_dims',
                         nargs = '+',
                         type=int,
@@ -286,6 +332,10 @@ if __name__ == "__main__":
                         default=[16, 32, 64, 128, 256, 256, 512],
                         )
     parser.add_argument("--faiss_add", action="store_true")
+    parser.add_argument("--debug_count_render", action="store_true")
+    parser.add_argument("--debug_count_render_dir", type=str, default=None)
+    parser.add_argument("--debug_count_render_limit", type=int, default=10)
+    parser.add_argument("--debug_count_render_every", type=int, default=1)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     print(args)
@@ -296,6 +346,12 @@ if __name__ == "__main__":
         args.modelpath = args.model_path + f"_{str(args.feature_level)}_{args.name_extra}_topk{args.topk}_weight_{index.coarsecode_size()+index.code_size}"
     except :
         args.model_path = args.model_path + f"_{str(args.feature_level)}_{args.name_extra}_topk{args.topk}_weight_{index.code_size}"
+
+    if not os.path.exists(args.model_path):
+        os.makedirs(args.model_path)
+
+    if not os.path.exists(os.path.join(args.model_path,"cfg_args")):
+        copyfile(os.path.join(os.path.dirname(args.start_checkpoint),"cfg_args"), os.path.join(args.model_path,"cfg_args"))
 
     if args.use_pq:
         if args.pq_index is None:
@@ -309,4 +365,3 @@ if __name__ == "__main__":
 
     # All done
     print("\nTraining complete.")
-

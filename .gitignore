@@ -1,6 +1,10 @@
 *.pyc
 .vscode
 output
+output_*/
+output_scannet_all/
+result/
+result_*/
 build
 diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
@@ -11,3 +15,26 @@ release
 *.jpg
 *.out
 shells
+CLIP/
+eval/
+environment.yml
+*_iou.json
+
+# Local datasets and generated assets
+data/
+langsplat/
+scannet/
+scannet_all/
+scannet
+scannet_all
+labeled_gaussians/
+gaussian-pretrain
+scene2/
+utils2/
+
+# Large checkpoints and binary feature/index artifacts
+ckpts/*.pth
+*.faiss
+*.npy
+*.npz
+*.zip

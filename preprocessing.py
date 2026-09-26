@@ -21,8 +21,6 @@ try:
 except ImportError:
     assert False, "open_clip is not installed, install it with `pip install open-clip-torch`"
 
-from CLIP.clip import clip
-
 @dataclass
 class OpenCLIPNetworkConfig:
     _target: Type = field(default_factory=lambda: OpenCLIPNetwork)
@@ -361,15 +359,15 @@ if __name__ == '__main__':
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
-    img_folder = os.path.join(dataset_path, 'images')
-    data_list = os.listdir(img_folder)
+    try:
+        img_folder = os.path.join(dataset_path, 'images')
+        data_list = os.listdir(img_folder)
+    except :
+        img_folder = os.path.join(dataset_path, 'color')
+        data_list = os.listdir(img_folder)
     data_list.sort()
 
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
-    # model, preprocess_for_tensor = clip.load("./CLIP/pretrain_models/ViT-B-16.pt", #"./CLIP/pretrain_models/RN50x64.pt", #"./CLIP/pretrain_models/ViT-B-16.pt", #"./CLIP/pretrain_models/RN50x64.pt", #"./CLIP/pretrain_models/ViT-L-14.pt",
-    #                                                     device="cuda",
-    #                                                     download_root='./CLIP/pretrain_models/',
-    #                                                     if_transform_tensor=True)
     for name, param in model.named_parameters():
         param.requires_grad = False
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
