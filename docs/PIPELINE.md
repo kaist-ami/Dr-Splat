@@ -90,6 +90,8 @@ Run the scene list in `shell/scannet_all_scenes.txt`:
 GPU_ID=0 bash shell/run_scannet_all.sh
 ```
 
+The all-scenes script defaults to `./scannet/scannet_2d`, preprocesses missing scene metadata, and reuses existing expensive outputs. Optional PCA and activation rendering can be enabled with `RUN_VISUALIZATIONS=1`.
+
 The script performs:
 
 1. ScanNet preprocessing with `scripts/preprocess_scannet.py`.

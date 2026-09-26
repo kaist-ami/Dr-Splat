@@ -175,6 +175,8 @@ Run all scenes listed in `shell/scannet_all_scenes.txt`:
 GPU_ID=0 bash shell/run_scannet_all.sh
 ```
 
+The all-scenes script reuses existing language features, Dr. Splat checkpoints, and Gaussian labels. Set `RUN_VISUALIZATIONS=1` only when PCA and activation renders are also required; they are skipped by default during metric evaluation.
+
 To run the ScanNet evaluation manually after preprocessing, feature extraction, Dr. Splat training, and pseudo GT generation:
 
 ```bash

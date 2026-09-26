@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-24}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-24}"
 export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-24}"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
 GPU_ID="${GPU_ID:-0}"
 FEATURE_LEVEL="${FEATURE_LEVEL:-3}"
@@ -10,9 +15,11 @@ PORT="${PORT:-55560}"
 PQ_INDEX="${PQ_INDEX:-./ckpts/pq_index.faiss}"
 
 SCENE_LIST_FILE="${SCENE_LIST_FILE:-./shell/scannet_all_scenes.txt}"
-CAMERA_ROOT="${CAMERA_ROOT:-./scannet_all/scannet_2d}"
+SCANNET_ROOT="${SCANNET_ROOT:-./scannet}"
+CAMERA_ROOT="${CAMERA_ROOT:-${SCANNET_ROOT}/scannet_2d}"
 PRETRAIN_ROOT="${PRETRAIN_ROOT:-./gaussian-pretrain}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-./output_scannet_all}"
+RUN_VISUALIZATIONS="${RUN_VISUALIZATIONS:-0}"
 
 IMG_LABEL="${IMG_LABEL:-sofa}"
 IMG_SAVE_LABEL="${IMG_SAVE_LABEL:-sofa_test}"
@@ -54,51 +61,72 @@ while IFS= read -r scene || [[ -n "${scene}" ]]; do
     continue
   fi
 
-  mkdir -p "${camera_path}/language_features"
+  if [[ ! -f "${camera_path}/transforms_train.json" || \
+        ! -f "${camera_path}/points3d.ply" || \
+        ! -f "${camera_path}/points3d_with_label.ply" ]]; then
+    echo "[run_scannet_all] preprocessing"
+    python scripts/preprocess_scannet.py --scannet_root "${SCANNET_ROOT}" "${scene}"
+  fi
 
-  echo "[run_scannet_all] 1/6 feature extraction"
-  CUDA_VISIBLE_DEVICES="${GPU_ID}" python preprocessing.py \
-    --dataset_path "${camera_path}"
+  if ! find "${camera_path}/language_features" -maxdepth 1 -name '*_s.npy' -print -quit 2>/dev/null | grep -q .; then
+    mkdir -p "${camera_path}/language_features"
+    echo "[run_scannet_all] feature extraction"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" python preprocessing.py \
+      --dataset_path "${camera_path}" \
+      --sam_ckpt_path ckpts/sam_vit_h_4b8939.pth
+  else
+    echo "[run_scannet_all] reuse existing language features"
+  fi
 
-  echo "[run_scannet_all] 2/6 training"
-  CUDA_VISIBLE_DEVICES="${GPU_ID}" python train.py \
-    -s "${camera_path}" \
-    -m "${output_path}" \
-    --start_checkpoint "${trained_3dgs_path}/chkpnt30000.pth" \
-    --feature_level "${FEATURE_LEVEL}" \
-    --name_extra pq_openclip \
-    --use_pq \
-    --pq_index "${PQ_INDEX}" \
-    --port "${PORT}" \
-    --topk "${TOPK}" \
-    --eval
+  if [[ ! -f "${model_path}/chkpnt0.pth" ]]; then
+    echo "[run_scannet_all] Dr. Splat registration"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" python train.py \
+      -s "${camera_path}" \
+      -m "${output_path}" \
+      --start_checkpoint "${trained_3dgs_path}/chkpnt30000.pth" \
+      --feature_level "${FEATURE_LEVEL}" \
+      --name_extra pq_openclip \
+      --use_pq \
+      --pq_index "${PQ_INDEX}" \
+      --port "${PORT}" \
+      --topk "${TOPK}" \
+      --eval
+  else
+    echo "[run_scannet_all] reuse existing Dr. Splat output"
+  fi
 
-  echo "[run_scannet_all] 3/6 feature PCA visualization"
-  CUDA_VISIBLE_DEVICES="${GPU_ID}" python render_pca.py \
-    -s "${camera_path}" \
-    -m "${model_path}" \
-    --pq_index "${PQ_INDEX}" \
-    --feature_level "${FEATURE_LEVEL}" \
-    -l language_features_dim3
+  if [[ "${RUN_VISUALIZATIONS}" == "1" ]]; then
+    echo "[run_scannet_all] feature PCA visualization"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" python render_pca.py \
+      -s "${camera_path}" \
+      -m "${model_path}" \
+      --pq_index "${PQ_INDEX}" \
+      --feature_level "${FEATURE_LEVEL}" \
+      -l language_features_dim3
 
-  echo "[run_scannet_all] 4/6 activation visualization"
-  CUDA_VISIBLE_DEVICES="${GPU_ID}" python render_activation.py \
-    -s "${camera_path}" \
-    -m "${model_path}" \
-    --semantic_model sam \
-    --feature_level "${FEATURE_LEVEL}" \
-    --pq_index "${PQ_INDEX}" \
-    --img_label "${IMG_LABEL}" \
-    --img_save_label "${IMG_SAVE_LABEL}" \
-    --threshold "${ACT_THRESHOLD}" \
-    -l language_features_dim3
+    echo "[run_scannet_all] activation visualization"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" python render_activation.py \
+      -s "${camera_path}" \
+      -m "${model_path}" \
+      --semantic_model sam \
+      --feature_level "${FEATURE_LEVEL}" \
+      --pq_index "${PQ_INDEX}" \
+      --img_label "${IMG_LABEL}" \
+      --img_save_label "${IMG_SAVE_LABEL}" \
+      --threshold "${ACT_THRESHOLD}" \
+      -l language_features_dim3
+  fi
 
-  echo "[run_scannet_all] 5/6 labeling gaussians"
-  CUDA_VISIBLE_DEVICES="${GPU_ID}" python labeling_gaussians.py \
-    -s "${camera_path}" \
-    -m "${trained_3dgs_path}"
+  if [[ ! -f "./labeled_gaussians/${scene}/labels.npy" ]]; then
+    echo "[run_scannet_all] labeling gaussians"
+    CUDA_VISIBLE_DEVICES="${GPU_ID}" python labeling_gaussians.py \
+      -s "${camera_path}" \
+      -m "${trained_3dgs_path}"
+  else
+    echo "[run_scannet_all] reuse existing Gaussian labels"
+  fi
 
-  echo "[run_scannet_all] 6/6 ScanNet evaluation"
+  echo "[run_scannet_all] ScanNet evaluation"
   CUDA_VISIBLE_DEVICES="${GPU_ID}" python eval_scannet_nonfix.py \
     -m "${model_path}" \
     --use_pq \
